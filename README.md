@@ -8,46 +8,60 @@
     <img src="https://img.shields.io/badge/Matplotlib-3.x-orange.svg" alt="Matplotlib">
 </p>
 
-This project is a tool for demographic analysis of migration processes between Russia and the European Union countries. Instead of simply counting arrivals, it focuses on the **Retention Rate** — a key indicator that shows what percentage of immigrants remain in the destination country on a long-term basis.
+This project is a tool for demographic analysis of migration processes between Russia and the European Union countries. Instead of simply counting arrivals, it answers two questions:
 
-The analysis covers the key countries of attraction for Russian citizens: **Germany, Spain, France, and Italy** for the period since 2008.
+1.  **Where do Russian migrants put down long-term roots — and via which track?** Settlement is split into **passport** (naturalization) vs. **permanent residence** (long-term permit holders).
+2.  **Which countries have the highest exodus?** A cumulative **Outflow Rate** marks countries used mainly as transit points.
 
-## 📊 Methodology: DBNA & Forensic Analysis
+The analysis covers the key countries of attraction for Russian citizens (e.g. **Germany, Spain, France, Italy**, plus any other destinations present in your data) for the period since 2008.
 
-Standard "inflow minus outflow" analysis methods do not work for EU migration statistics due to two problems:
-1.  **Unreliable emigration data (`migr_emi`)**: Many countries, including France, hardly keep any records of foreigners who have left.
-2.  **Distortion due to naturalization (`migr_acq`)**: When an immigrant obtains citizenship, they disappear from the "foreign population" statistics, which can be mistakenly interpreted as emigration.
-3.  **Invisible Populations**: Standard models ignore asylum seekers whose applications are pending. They are physically present but not yet in the "Valid Residence Permit" stock.
+## 📊 Methodology: DBNA (Demographic Balancing with Naturalization Adjustment)
 
-To solve these problems, the **Demographic Balancing with Naturalization Adjustment (DBNA) Method** is used, now upgraded to a **Forensic Model**.
+Standard "inflow minus outflow" analysis does not work for EU migration statistics due to two problems:
+1.  **Unreliable emigration data (`migr_emi`)**: Many countries, including France, hardly keep any records of foreigners who have left, so outflow cannot be measured directly.
+2.  **Distortion due to naturalization (`migr_acq`)**: When an immigrant obtains citizenship, they disappear from the "foreign population" statistics, which a naive model misreads as emigration.
+
+The **DBNA Method** reconstructs a theoretical population path from the starting stock and cumulative inflow, then explains the gap to the observed stock as either naturalization (integration) or implied emigration (loss).
 
 ### Key Metrics
 
-1.  **Standard Retention Rate (CR)**:
-    The classic metric based on official residence permits.
-    $$CR = \left( 1 - \frac{\max(0, E_{implied})}{P_t + I_{(t)}} \right) \times 100\%$$
+All rates are expressed as a percentage of cumulative inflow over the period.
 
-2.  **Forensic Retention Rate (De Facto CR)**:
-    Adjusts the population stock to include **Pending Asylum Seekers** (`migr_asypenctzm`). This reveals the "De Facto" retention, often higher than official statistics suggest because these individuals have not left, even if they don't have a permit yet.
+1.  **Total Retention Rate**:
+    Share of the inflow cohort that physically remained — whether still on a permit or already naturalized.
+    $$\text{Total Retention} = \frac{(P_{end} - P_{start}) + A}{I_{sum}} \times 100\%$$
 
-3.  **Anchoring Ratio**:
-    Measures the depth of integration.
-    $$Anchoring = \frac{\text{Long-Term Residents}}{\text{Total Valid Stock}} \times 100\%$$
-    A high ratio indicates a settled community, while a low ratio suggests a transient "transit" population.
+2.  **Passport-Anchored Rate** (citizenship track):
+    $$\text{Passport} = \frac{A}{I_{sum}} \times 100\%$$
+
+3.  **Permit Retention Rate** (residence-permit track):
+    Net change in the permit stock — those who stayed on a permit rather than naturalizing.
+    $$\text{Permit} = \frac{P_{end} - P_{start}}{I_{sum}} \times 100\%$$
+
+4.  **Outflow Rate** (exodus / transit intensity):
+    $$\text{Outflow} = \frac{\max\left(0,\; (P_{start} + I_{sum}) - (P_{end} + A)\right)}{I_{sum}} \times 100\%$$
 
 Where:
--   $P_t$: Number of residents (`migr_resvalid`).
--   $I_{(t)}$: Inflow (`migr_resfirst`).
--   $E_{implied}$: "Implied emigration," calculated as the difference between the expected and actual population figures.
+-   $P_{start}, P_{end}$: residence-permit stock at the start/end of the period (`migr_resvalid`).
+-   $I_{sum}$: cumulative inflow over the period (`migr_resfirst`).
+-   $A$: cumulative naturalizations (`migr_acq`).
+
+> **The three outcome tracks form a clean partition of the inflow cohort:**
+> $$\text{Passport} + \text{Permit} + \text{Outflow} = 100\%$$
+> (since $\text{Total Retention} = \text{Passport} + \text{Permit}$, and $\text{Total Retention} + \text{Outflow} = 100\%$ before the outflow zero-clip). Each migrant is accounted for exactly once: naturalized, still on a permit, or gone.
+>
+> **Why not `migr_reslong`?** An earlier version measured the permit track from the long-term-residents stock. That stock also counts arrivals from *before* the analysis window, so dividing it by within-window inflow produced rates well over 100% (plus a coverage break for Germany at 2016 and a definitional inconsistency for Norway). Net permit change (`migr_resvalid`) is consistent with the inflow series and keeps the partition exact. `migr_reslong` is retained only as an overlay line in the per-country dashboard.
+>
+> **Note:** Permit Retention can be **negative** when a community shrinks on permits — e.g. when more people naturalize (moving to the passport track) or emigrate than arrive. This is a real signal, common post-2022.
 
 ## 💾 Data Acquisition & Setup
 
-This analysis relies exclusively on official data from the **Eurostat Database**, ensuring reliability and comparability across countries. The script now requires **7 specific datasets** to perform the forensic reconstruction.
+This analysis relies exclusively on official data from the **Eurostat Database**, ensuring reliability and comparability across countries. The script requires **4 specific datasets**.
 
 1.  **Clone the repository and install dependencies:**
     ```bash
     git clone https://github.com/KiraKicka/Ru-EU-Migration-Retention-Analyzer
-    cd migration-analyzer
+    cd Ru-EU-Migration-Retention-Analyzer
     pip install pandas numpy matplotlib seaborn openpyxl
     ```
 
@@ -65,41 +79,43 @@ This analysis relies exclusively on official data from the **Eurostat Database**
 
         | Eurostat Code | Purpose | Why it's needed | Filename to use |
         | :--- | :--- | :--- | :--- |
-        | **`migr_resvalid`** | Stock of Residents | Provides the baseline number of Russian citizens with valid residence permits at the end of each year. This is our ground truth. | `migr_resvalid.xlsx` |
-        | **`migr_resfirst`** | Inflow of Immigrants | Tracks the number of newly issued first residence permits each year. This is the primary input driving population growth. | `migr_resfirst.xlsx` |
-        | **`migr_acq`** | Naturalization | Accounts for residents who acquire citizenship. They haven't emigrated but are removed from the `migr_resvalid` stock, so we must track them to avoid misinterpreting their exit as a "loss". | `migr_acq.xlsx` |
-        | **`migr_asypenctzm`** | **Pending Asylum** | **(New)** Tracks asylum seekers waiting for a decision. They are physically present but invisible in standard stock data. | `migr_asypenctzm.xlsx` |
-        | **`migr_reschange`** | Change of Status | **(New)** Used to analyze churn and integration pathways. | `migr_reschange.xlsx` |
-        | **`migr_reslong`** | Long-Term Residents | **(New)** Used to calculate the Anchoring Ratio. | `migr_reslong.xlsx` |
-        | **`migr_resbc13`** | EU Blue Cards | **(New)** Tracks high-skilled migration presence. | `migr_resbc13.xlsx` |
+        | **`migr_resvalid`** | Stock of Residents | Provides the baseline number of Russian citizens with valid residence permits at the end of each year. This is our ground truth ($P_{start}$, $P_{end}$). | `migr_resvalid.xlsx` |
+        | **`migr_resfirst`** | Inflow of Immigrants | Tracks the number of newly issued first residence permits each year — the primary input ($I_{sum}$) and the denominator for every rate. | `migr_resfirst.xlsx` |
+        | **`migr_acq`** | Naturalization | Accounts for residents who acquire citizenship ($A$). They haven't emigrated but are removed from the `migr_resvalid` stock, so tracking them avoids misreading their exit as a "loss" and feeds the Passport-Anchored Rate. | `migr_acq.xlsx` |
+        | **`migr_reslong`** | Long-Term Residents | Long-term/permanent residents — shown as an overlay line in the per-country dashboard (not used in the headline metrics). | `migr_reslong.xlsx` |
 
-    > **Note:** The script automatically handles Monthly data (e.g., `2023M12`) often found in the Asylum dataset (`migr_asypenctzm`). It filters for December to align with annual stocks.
+    > **Note:** The script automatically handles Monthly data (e.g., `2023M12`) should any dataset contain it — it filters for December to align with annual stocks.
 
 3.  **Place the files:**
     Move the downloaded `.xlsx` files into the root directory of the project, ensuring their names match the "Filename to use" column above.
 
-## 📈 Understanding the Gap Analysis
+## 📈 Understanding the Visualizations
 
-The core of this project is the **Gap Decomposition** chart, which visualizes the difference between a theoretical "perfect retention" scenario and the observed reality.
+The script opens **two windows**.
 
-Here is how to interpret each element of the chart:
+### 1. Migrant Tracks Over Time (three trend panels)
 
-*   **THE "GAP"**: This is the overall space between the top grey line (the maximum possible population) and the bottom blue line (the actual population). The chart explains what this gap is made of.
+Three stacked panels — **Settled (Citizenship)**, **Settled (Residence permit, net)**, and **Left the country (Outflow)**. In each panel the X-axis is the year, the Y-axis is the rate as a **% of cumulative inflow** up to that year, and each line is a country. This shows how each track *evolves* rather than just its end-state, so you can watch a corridor harden into settlement or drift toward transit, with the `2014` and `2022` markers flagging geopolitical breaks. The three panels partition the inflow cohort (they sum to 100% per country-year), so reading across them tells the whole story of a corridor.
+
+Because every rate is normalized to cumulative inflow, the lines are comparable across both countries and years. **Caveats:** the first year or two of a corridor has a small cumulative-inflow denominator, so early points can swing (a regularization can briefly push net permit retention slightly above 100%). The permit panel can also go **negative** when a community shrinks on permits (heavy naturalization or emigration). Years below a 1,000-person cumulative-inflow floor are dropped.
+
+### 2. Per-Country Gap Decomposition (interactive time series)
+
+Pick a country with the radio buttons to see the gap between a theoretical "perfect retention" path and the observed reality over time. The side panel shows that country's four metrics; the `2014` and `2022` markers flag geopolitical breaks.
 
 *   **Lines:**
-    *   <span style="color:grey">▬</span> **Grey Line (`Theoretical Max`):** Represents the theoretical maximum number of residents if **no one ever left** and **no one acquired citizenship**. It's calculated as `Initial Population + Cumulative Inflow`.
-    *   <span style="color:gold">▬</span> **Gold Dashed Line (`Theoretical Adj.`):** This is a more realistic theoretical line. It subtracts the cumulative number of naturalized citizens from the `Theoretical Max`. This line shows what the resident stock *should* be if the only "exit" was acquiring a passport.
-    *   <span style="color:purple">····</span> **Purple Dotted Line (`Total De Facto`):** The **Forensic View**. This is `Official Stock` + `Pending Asylum`.
-    *   <span style="color:#003366">▬</span> **Blue Line (`Official Stock`):** The number of valid residence permits.
+    *   <span style="color:grey">▬</span> **Grey (`Theoretical Max`):** residents if **no one left** and **no one naturalized** — `Initial Stock + Cumulative Inflow`.
+    *   <span style="color:gold">▬</span> **Gold Dashed (`Theoretical Adj.`):** `Theoretical Max` minus cumulative naturalizations — the stock you'd expect if the only exit were acquiring a passport.
+    *   <span style="color:#003366">▬</span> **Blue (`Official Stock`):** valid residence permits (`migr_resvalid`).
+    *   <span style="color:#2ca02c">▬·</span> **Green Dash-Dot (`Long-Term Residents`):** permanent residents (`migr_reslong`).
 
 *   **Shaded Areas:**
-    *   <span style="color:gold;opacity:0.5">■</span> **Gold Area (`Naturalized / Integration`):** The gap between the grey and gold lines. This area represents the portion of the original cohort that has **successfully integrated** by becoming citizens of the host country. From a retention perspective, this is a positive outcome, not a loss.
-    *   <span style="color:purple;opacity:0.3">■</span> **Purple Area (`Pending / Invisible`):** People physically present (Asylum seekers) but not in the official stock.
-    *   <span style="color:red;opacity:0.5">■</span> **Red Area (`Implied Emigration`):** The "unexplained" loss calculated from the **De Facto** line (Forensic view).
+    *   <span style="color:gold;opacity:0.5">■</span> **Gold (`Naturalized / Integration`):** between grey and gold lines — the cohort that integrated by becoming citizens. A positive outcome, not a loss.
+    *   <span style="color:red;opacity:0.5">■</span> **Red (`Implied Emigration`):** between the citizenship-adjusted line and the actual stock — the unexplained loss.
 
 *   **Bottom Chart (Flows):**
-    *   <span style="color:teal">▬</span> **Teal Line (`Inflow`):** New arrivals (First Permits).
-    *   <span style="color:gold">▬</span> **Gold Line (`Naturalization`):** Passport issuance. Comparing these two shows if a country is importing new people or integrating existing ones.
+    *   <span style="color:teal">▬</span> **Teal (`Inflow`):** new arrivals (First Permits).
+    *   <span style="color:gold">▬</span> **Gold (`Naturalization`):** passport issuance. Comparing the two shows whether a country is importing new people or integrating existing ones.
 
 ## 🚀 Usage
 
@@ -110,18 +126,31 @@ python migration_analysis.py
 ```
 
 Execution process:
-1.  **Console report**: A ranking of countries by **Retention Rate** will be printed to the terminal.
+1.  **Console report**: Two ranking tables are printed to the terminal — long-term settlement (split by track) and exodus intensity.
     ```
-    === DEMOGRAPHIC REPORT (Retention Ranking) ===
-    Country         |   Std CR | Forensic CR | Anchoring
-    -------------------------------------------------------
-    France          |    99.8% |      101.2% |     45.2%
-    Germany         |    98.9% |       99.5% |     62.1%
-    Italy           |    98.1% |       98.3% |     55.0%
-    Spain           |    97.4% |       97.9% |     38.4%
-    ==============================================
+    ==============================================================================
+     DEMOGRAPHIC REPORT: RU -> EU MIGRATION RETENTION & EXODUS
+    ==============================================================================
+
+     LONG-TERM SETTLEMENT RANKING (by Total Retention):
+    Country          | Total Retention |  of which Passport |    of which Permit
+    ------------------------------------------------------------------------------
+    France           |           93.8% |              42.3% |              51.5%
+    Spain            |           70.7% |               9.5% |              61.2%
+    Germany          |           69.9% |              36.1% |              33.8%
+    Italy            |           57.0% |              29.5% |              27.5%
+
+     EXODUS RANKING (by Outflow / transit intensity):
+    Country          |    Outflow Rate
+    ------------------------------------
+    Italy            |           43.0%
+    Germany          |           30.1%
+    Spain            |           29.3%
+    France           |            6.2%
+    ==============================================================================
     ```
-2.  **Interactive panel**: A `Matplotlib` window with visualizations will automatically open, where you can switch between countries.
+    (Numbers are illustrative; actual values depend on your downloaded data. Passport + Permit = Total Retention, and Total Retention + Outflow = 100%.)
+2.  **Two windows** open automatically: the **Migrant Tracks Over Time** trend panels and the interactive **Per-Country Gap Decomposition** dashboard.
 
 ## 📄 License
 
